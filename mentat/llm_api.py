@@ -9,7 +9,7 @@ import tiktoken
 from dotenv import load_dotenv
 from termcolor import cprint
 
-from .config_manager import mentat_dir_path, user_config_file_name
+from .config_manager import mentat_dir_path, user_config_path
 
 package_name = __name__.split(".")[0]
 
@@ -25,10 +25,8 @@ def setup_api_key():
         openai.Model.list()  # Test the API key
     except openai.error.AuthenticationError:
         cprint(
-            (
-                "No valid OpenAI api key detected.\nEither place your key into a .env"
-                " file or export it as an environment variable."
-            ),
+            "No valid OpenAI api key detected.\nEither place your key into a .env"
+            " file or export it as an environment variable.",
             "red",
         )
         sys.exit(0)
@@ -57,6 +55,33 @@ def count_tokens(message: str) -> int:
     return len(tiktoken.encoding_for_model("gpt-4").encode(message))
 
 
+def check_model_availability(allow_32k: bool, use_gpt_35: bool) -> bool:
+    available_models = [x["id"] for x in openai.Model.list()["data"]]
+    if allow_32k:
+        # check if user has access to gpt-4-32k
+        if "gpt-4-32k-0314" not in available_models:
+            cprint(
+                "You set ALLOW_32K to true, but your OpenAI API key doesn't"
+                " have access to gpt-4-32k-0314. To remove this warning, set"
+                " ALLOW_32K to false until you have access.",
+                "yellow",
+            )
+            allow_32k = False
+
+    if not allow_32k:
+        # check if user has access to gpt-4
+        if "gpt-4-0314" not in available_models:
+            if not use_gpt_35:
+                cprint(
+                    "Sorry, but your OpenAI API key doesn't have access to gpt-4-0314,"
+                    " which is currently required to run Mentat.",
+                    "red",
+                )
+                raise KeyboardInterrupt
+
+    return allow_32k
+
+
 def choose_model(messages: list[dict[str, str]], allow_32k: bool, use_gpt_35: bool) -> str:
     prompt_token_count = 0
     tokenizer = tiktoken.encoding_for_model("gpt-4")
@@ -80,12 +105,10 @@ def choose_model(messages: list[dict[str, str]], allow_32k: bool, use_gpt_35: bo
                 )
         else:
             cprint(
-                (
-                    "Warning: gpt-4-0314 has a maximum context length of 8192 tokens."
-                    " If you have access to gpt-4-32k-0314, set allow-32k to `true` in"
-                    f" `{os.path.join(mentat_dir_path, user_config_file_name)}` to use"
-                    " it. Attempting to run with gpt-4-0314:"
-                ),
+                "Warning: gpt-4-0314 has a maximum context length of 8192 tokens."
+                " If you have access to gpt-4-32k-0314, set allow-32k to `true` in"
+                f" `{user_config_path}` to use"
+                " it. Attempting to run with gpt-4-0314:",
                 "yellow",
             )
     return model, prompt_token_count

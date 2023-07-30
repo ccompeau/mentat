@@ -15,6 +15,5 @@
             "#ffffff bold"
         ]
     ],
-    "filetype-include-list": [],
-    "filetype-exclude-list": []
+    "file-exclude-glob-list": []
 }

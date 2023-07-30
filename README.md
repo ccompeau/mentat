@@ -1,5 +1,8 @@
 [![Twitter Follow](https://img.shields.io/twitter/follow/bio_bootloader?style=social)](https://twitter.com/bio_bootloader)
 [![Discord Follow](https://dcbadge.vercel.app/api/server/XbPdxAMJte?style=flat)](https://discord.gg/zbvd9qx9Pb)
+[![Stable Version](https://img.shields.io/pypi/v/mentat-ai?color=blue)](https://pypi.org/project/mentat-ai/)
+[![License](https://img.shields.io/pypi/l/mentat-ai.svg)](https://github.com/biobootloader/mentat/blob/main/LICENSE)
+
 # 🧙‍♂️ Mentat ⚡
 
 > _It is by will alone I set my mind in motion_
@@ -16,20 +19,25 @@ Unlike Copilot, Mentat coordinates edits across multiple locations and files. An
 
 Want help understanding a new codebase? Need to add a new feature? Refactor existing code? Mentat can do it!
 
-# 🍿 Example Videos
+# 🍿 Example Videos (🔊 on!)
 
-See the videos on [Twitter](https://twitter.com/bio_bootloader/status/1683906735248125955) or YouTube:
-- [Intro (2 min)](https://www.youtube.com/watch?v=lODjaWclwpY)
+https://github.com/biobootloader/mentat/assets/128252497/35b027a9-d639-452c-a53c-ef019a645719
+
+See more videos on [Twitter](https://twitter.com/bio_bootloader/status/1683906735248125955) or YouTube:
+- [Intro (2 min - same video as above)](https://www.youtube.com/watch?v=lODjaWclwpY)
 - [Explaining and editing Llama2.c (3 min)](https://www.youtube.com/watch?v=qSyTWMFOjPs)
 - [More Mentat features (4 min)](https://www.youtube.com/watch?v=YJLDIqq8k2A)
 
 # ⚙️ Setup
+
+[Installation and Setup Demonstration Video](https://www.youtube.com/watch?v=bVJP8hY8uRM)
 
 ## Install
 
 Before installing, it's suggested that you create a virtual environment to install it in:
 
 ```
+# Python 3.10 or higher is required
 python3 -m venv .venv
 source .venv/bin/activate
 ```
@@ -64,8 +72,9 @@ For custom configuration options see [configuration.md](docs/configuration.md)
 
 
 # 🚀 Usage
-Run Mentat with:
+
+Run Mentat from within your project directory. Mentat uses git, so if your project doesn't already have git set up, run `git init`. Then you can run Mentat with:
 
 `mentat <paths to files or directories>`
 
-If you provide a directory, Mentat will add all non-hidden text files in that directory to it's context. If this exceeds the GPT-4 token context limit, try running Mentat with just the files you need it to see.
+If you provide a directory, Mentat will add all non git-ignored text files in that directory to it's context. If you provide a glob pattern, Mentat will add all files matching the pattern to it's context. If this exceeds the GPT-4 token context limit, try running Mentat with just the files you need it to see.

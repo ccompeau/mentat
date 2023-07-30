@@ -1,14 +1,11 @@
+import glob
 import logging
 import math
-import mimetypes
 import os
-import subprocess
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
 
-import git
-import pathspec
 from termcolor import cprint
 
 from .change_conflict_resolution import (
@@ -17,103 +14,12 @@ from .change_conflict_resolution import (
 )
 from .code_change import CodeChange, CodeChangeAction
 from .config_manager import ConfigManager
+from .git_handler import (
+    get_git_diff_for_path,
+    get_non_gitignored_files,
+    get_paths_with_git_diffs,
+)
 from .user_input_manager import UserInputManager
-
-# mimetypes is OS dependent, so it's best to add as many extensions as we can
-# fmt: off
-default_filetype_include_list = [
-    ".py",      # Python
-    ".java",    # Java
-    ".scala",   # Scala
-    ".kt",      # Kotlin
-    ".php",     # PHP
-    ".html",    # HTML
-    ".css",     # CSS
-    ".less",    # Less
-    ".scss",    # SCSS
-    ".js",      # Javascript
-    ".ts",      # Typescript
-    ".c",       # C
-    ".cpp",     # C++
-    ".h",       # C Header
-    ".cs",      # C#
-    ".go",      # Go
-    ".rs",      # Rust
-    ".rb",      # Ruby
-    ".swift",   # Swift
-    ".lua",     # Lua
-    ".pl",      # Perl
-    ".sql",     # SQL
-    ".r",       # R
-    ".m",       # objective-c
-    ".sh",      # shell scripts
-    ".f",       # fortran
-    ".jsx",     # javascript react
-    ".tsx",     # typescript react
-]
-default_filetype_exclude_list = []
-# fmt: on
-
-
-def _get_git_diff_for_path(git_root, path: str) -> str:
-    return subprocess.check_output(["git", "diff", path], cwd=git_root).decode("utf-8")
-
-
-def _get_paths_with_git_diffs(git_root) -> set[str]:
-    changed = subprocess.check_output(
-        ["git", "diff", "--name-only"], cwd=git_root, text=True
-    ).split("\n")
-    return set(
-        map(lambda path: os.path.realpath(os.path.join(git_root, Path(path))), changed)
-    )
-
-
-def _get_git_root_for_path(path) -> str:
-    if os.path.isdir(path):
-        dir_path = path
-    else:
-        dir_path = os.path.dirname(path)
-    try:
-        git_root = (
-            subprocess.check_output(
-                [
-                    "git",
-                    "rev-parse",
-                    "--show-toplevel",
-                ],
-                cwd=os.path.realpath(dir_path),
-                stderr=subprocess.DEVNULL,
-            )
-            .decode("utf-8")
-            .strip()
-        )
-        # call realpath to resolve symlinks, so all paths match
-        return os.path.realpath(git_root)
-    except subprocess.CalledProcessError:
-        logging.error(f"File {path} isn't part of a git project.")
-        exit()
-
-
-def _get_shared_git_root_for_paths(paths) -> str:
-    git_roots = set()
-    for path in paths:
-        git_root = _get_git_root_for_path(path)
-        git_roots.add(git_root)
-    if not paths:
-        git_root = _get_git_root_for_path(os.getcwd())
-        git_roots.add(git_root)
-
-    if len(git_roots) > 1:
-        logging.error(
-            "All paths must be part of the same git project! Projects provided:"
-            f" {git_roots}"
-        )
-        exit()
-    elif len(git_roots) == 0:
-        logging.error("No git projects provided.")
-        exit()
-
-    return git_roots.pop()
 
 
 def _build_path_tree(file_paths, git_root):
@@ -129,7 +35,7 @@ def _build_path_tree(file_paths, git_root):
     return tree
 
 
-def _print_path_tree(tree, non_text_files, changed_files, cur_path, prefix=""):
+def _print_path_tree(tree, changed_files, cur_path, prefix=""):
     keys = list(tree.keys())
     for i, key in enumerate(sorted(keys)):
         if i < len(keys) - 1:
@@ -143,20 +49,23 @@ def _print_path_tree(tree, non_text_files, changed_files, cur_path, prefix=""):
         star = "* " if cur in changed_files else ""
         if tree[key]:
             color = "blue"
-        elif cur in non_text_files:
-            color = "yellow"
         elif star:
             color = "green"
         else:
             color = None
         cprint(f"{star}{key}", color)
         if tree[key]:
-            _print_path_tree(tree[key], non_text_files, changed_files, cur, new_prefix)
+            _print_path_tree(tree[key], changed_files, cur, new_prefix)
 
 
-def _is_file_text(file_name):
-    file_type, encoding = mimetypes.guess_type(file_name)
-    return file_type and file_type.split("/")[0] == "text"
+def _is_file_text_encoded(file_path):
+    try:
+        # The ultimate filetype test
+        with open(file_path) as f:
+            f.read()
+        return True
+    except UnicodeDecodeError:
+        return False
 
 
 class CodeFileManager:
@@ -165,19 +74,10 @@ class CodeFileManager:
         paths: Iterable[str],
         user_input_manager: UserInputManager,
         config: ConfigManager,
+        git_root: str,
     ):
-        # Make sure to apply user config last
-        for file_type in default_filetype_include_list:
-            mimetypes.add_type("text/default-include-list", file_type)
-        for file_type in default_filetype_exclude_list:
-            mimetypes.types_map.pop(file_type, None)
-
-        for file_type in config.filetype_include_list():
-            mimetypes.add_type("text/user-include-list", file_type)
-        for file_type in config.filetype_exclude_list():
-            mimetypes.types_map.pop(file_type, None)
-
-        self.git_root = _get_shared_git_root_for_paths(paths)
+        self.config = config
+        self.git_root = git_root
         self._set_file_paths(paths)
         self.user_input_manager = user_input_manager
 
@@ -188,9 +88,8 @@ class CodeFileManager:
             cprint("Git project: ", "green", end="")
         cprint(os.path.split(self.git_root)[1], "blue")
         _print_path_tree(
-            _build_path_tree(self.file_paths + self.non_text_file_paths, self.git_root),
-            self.non_text_file_paths,
-            _get_paths_with_git_diffs(self.git_root),
+            _build_path_tree(self.file_paths, self.git_root),
+            get_paths_with_git_diffs(self.git_root),
             self.git_root,
         )
 
@@ -206,44 +105,44 @@ class CodeFileManager:
             print("Exiting...")
             exit()
 
-        path_set = set()
-        self.non_text_file_paths = []
-        self.file_paths = []
-
+        self.file_paths = set()
         for path in paths:
             path = Path(path)
             if path.is_file():
-                path_set.add(os.path.realpath(path))
+                if not _is_file_text_encoded(path):
+                    logging.info(f"File path {path} is not text encoded.")
+                    cprint(
+                        f"Filepath {path} is not text encoded.",
+                        "light_yellow",
+                    )
+                    raise KeyboardInterrupt
+                self.file_paths.add(os.path.realpath(path))
             elif path.is_dir():
-                all_files = set(pathspec.util.iter_tree_files(path, follow_links=False))
-                repo = git.Repo(self.git_root)
-                ignore_files = set(
-                    repo.ignored(*all_files)
-                    + list(filter(lambda p: p.startswith(".git"), all_files))
-                )
-                repo.close()
-                nonignored_files = all_files - ignore_files
-                non_text_files = filter(
-                    lambda f: not _is_file_text(
-                        os.path.realpath(os.path.join(path, f))
-                    ),
-                    nonignored_files,
-                )
-                self.non_text_file_paths.extend(
+                nonignored_files = set(
                     map(
                         lambda f: os.path.realpath(os.path.join(path, f)),
-                        non_text_files,
+                        get_non_gitignored_files(path),
                     )
                 )
-                text_files = filter(
-                    _is_file_text,
-                    map(
-                        lambda f: os.path.realpath(os.path.join(path, f)),
+
+                self.file_paths.update(
+                    filter(
+                        _is_file_text_encoded,
                         nonignored_files,
-                    ),
+                    )
                 )
-                path_set.update(text_files)
-        self.file_paths = list(path_set)
+
+        glob_excluded_files = set(
+            os.path.join(self.git_root, file)
+            for glob_path in self.config.file_exclude_glob_list()
+            # If the user puts a / at the beginning, it will try to look in root directory
+            for file in glob.glob(
+                pathname=glob_path,
+                root_dir=self.git_root,
+                recursive=True,
+            )
+        )
+        self.file_paths = list(self.file_paths - glob_excluded_files)
 
     def _read_file(self, abs_path) -> Iterable[str]:
         with open(abs_path, "r") as f:
@@ -264,16 +163,10 @@ class CodeFileManager:
             for i, line in enumerate(self.file_lines[abs_path], start=1):
                 code_message.append(f"{i}:{line}")
             code_message.append("")
-            git_diff_output = _get_git_diff_for_path(self.git_root, rel_path)
+            git_diff_output = get_git_diff_for_path(self.git_root, rel_path)
             if git_diff_output:
                 code_message.append("Current git diff for this file:")
                 code_message.append(f"{git_diff_output}")
-        if self.non_text_file_paths:
-            code_message.append("\nOther files:\n")
-            code_message.extend(
-                os.path.relpath(path, self.git_root)
-                for path in self.non_text_file_paths
-            )
         return "\n".join(code_message)
 
     def _handle_delete(self, delete_change):
@@ -309,13 +202,11 @@ class CodeFileManager:
         rel_path = changes[0].file
         abs_path = os.path.join(self.git_root, rel_path)
         new_code_lines = self.file_lines[abs_path].copy()
-        if new_code_lines != self._read_file(rel_path):
+        if new_code_lines != self._read_file(abs_path):
             logging.info(f"File '{rel_path}' changed while generating changes")
             cprint(
-                (
-                    f"File '{rel_path}' changed while generating; current file changes"
-                    " will be erased. Continue?"
-                ),
+                f"File '{rel_path}' changed while generating; current file changes"
+                " will be erased. Continue?",
                 color="light_yellow",
             )
             if not self.user_input_manager.ask_yes_no(default_yes=False):

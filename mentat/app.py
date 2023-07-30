@@ -1,4 +1,5 @@
 import argparse
+import glob
 import logging
 import os
 from typing import Iterable
@@ -10,6 +11,7 @@ from .code_change_display import print_change
 from .code_file_manager import CodeFileManager
 from .config_manager import ConfigManager, mentat_dir_path
 from .conversation import Conversation
+from .git_handler import get_shared_git_root_for_paths
 from .llm_api import CostTracker, count_tokens, setup_api_key
 from .logging_config import setup_logging
 from .user_input_manager import UserInputManager
@@ -19,9 +21,20 @@ def run_cli():
     parser = argparse.ArgumentParser(
         description="Run conversation with command line args"
     )
-    parser.add_argument("paths", nargs="*", help="Paths to directories or files")
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        help="Space separated list of file paths, directory paths, or glob patterns",
+    )
     paths = parser.parse_args().paths
-    run(paths)
+    run(expand_paths(paths))
+
+
+def expand_paths(paths: Iterable[str]) -> Iterable[str]:
+    globbed_paths = set()
+    for path in paths:
+        globbed_paths.update(glob.glob(pathname=path, recursive=True))
+    return globbed_paths
 
 
 def run(paths: Iterable[str]):
@@ -33,17 +46,18 @@ def run(paths: Iterable[str]):
     cost_tracker = CostTracker()
     try:
         loop(paths, cost_tracker)
-    except KeyboardInterrupt as e:
+    except (EOFError, KeyboardInterrupt) as e:
         print(e)
     finally:
         cost_tracker.display_total_cost()
 
 
 def loop(paths: Iterable[str], cost_tracker: CostTracker) -> None:
-    config = ConfigManager()
+    git_root = get_shared_git_root_for_paths(paths)
+    config = ConfigManager(git_root)
     conv = Conversation(config, cost_tracker)
     user_input_manager = UserInputManager(config)
-    code_file_manager = CodeFileManager(paths, user_input_manager, config)
+    code_file_manager = CodeFileManager(paths, user_input_manager, config, git_root)
 
     tokens = count_tokens(code_file_manager.get_code_message())
     cprint(f"\nFile token count: {tokens}", "cyan")
@@ -55,7 +69,7 @@ def loop(paths: Iterable[str], cost_tracker: CostTracker) -> None:
             user_response = user_input_manager.collect_user_input()
             conv.add_user_message(user_response)
         explanation, code_changes = conv.get_model_response(code_file_manager, config)
-        warn_user_wrong_files(code_file_manager, code_changes)
+        warn_user_wrong_files(code_file_manager, code_changes, git_root)
 
         if code_changes:
             need_user_request = get_user_feedback_on_changes(
@@ -66,7 +80,9 @@ def loop(paths: Iterable[str], cost_tracker: CostTracker) -> None:
 
 
 def warn_user_wrong_files(
-    code_file_manager: CodeFileManager, code_changes: Iterable[CodeChange]
+    code_file_manager: CodeFileManager,
+    code_changes: Iterable[CodeChange],
+    git_root: str,
 ):
     warned = set()
     for change in code_changes:
@@ -88,8 +104,7 @@ def warn_user_wrong_files(
             raise KeyboardInterrupt
 
         if (
-            os.path.join(code_file_manager.git_root, change.file)
-            not in code_file_manager.file_paths
+            os.path.join(git_root, change.file) not in code_file_manager.file_paths
             and change.action != CodeChangeAction.CreateFile
             and change.file not in warned
         ):

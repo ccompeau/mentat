@@ -6,6 +6,7 @@ import tempfile
 
 import pytest
 
+from mentat.config_manager import ConfigManager
 from mentat.streaming_printer import StreamingPrinter
 from mentat.user_input_manager import UserInputManager
 
@@ -66,7 +67,16 @@ def mock_collect_user_input(mocker):
 
 @pytest.fixture
 def mock_setup_api_key(mocker):
-    return mocker.patch("mentat.app.setup_api_key")
+    mocker.patch("mentat.app.setup_api_key")
+    mocker.patch("mentat.conversation.check_model_availability")
+    return
+
+
+@pytest.fixture
+def mock_config(temp_testbed):
+    config = ConfigManager(temp_testbed)
+    config.project_config = {}
+    return config
 
 
 def add_permissions(func, path, exc_info):
@@ -91,7 +101,7 @@ def add_permissions(func, path, exc_info):
 
 
 @pytest.fixture(autouse=True)
-def temp_testbed():
+def temp_testbed(monkeypatch):
     # create temporary copy of testbed, complete with git repo
     # realpath() resolves symlinks, required for paths to match on macOS
     temp_dir = os.path.realpath(tempfile.mkdtemp())
@@ -117,14 +127,12 @@ def temp_testbed():
         stderr=subprocess.DEVNULL,
     )
 
-    yield temp_testbed
+    # necessary to undo chdir before calling rmtree, or it fails on windows
+    with monkeypatch.context() as m:
+        m.chdir(temp_testbed)
+        yield temp_testbed
 
     shutil.rmtree(temp_dir, onerror=add_permissions)
-
-
-@pytest.fixture(autouse=True)
-def change_cwd(temp_testbed, monkeypatch):
-    monkeypatch.chdir(temp_testbed)
 
 
 @pytest.fixture(autouse=True)

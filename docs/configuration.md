@@ -1,6 +1,6 @@
 # 🔧 Configuration
 
-To change Mentat's default configuration, create `~/.mentat/config.json` and add the fields you want to change.
+To change Mentat's configuration, create `.mentat_config.json` in the git root of the project you are running Mentat for. Alternatively, creating `~/.mentat/.mentat_config.json` will create a default user config that Mentat will use if no config exists in your current git project.
 
 ## Options
 
@@ -13,12 +13,11 @@ Allow Mentat to use OpenAI's gpt-4 32k context window model. Your API key must a
 }
 ```
 
-### Filetype Include and Exclude list
-Determines which file types inside of a directory will be automatically included or excluded from context when Mentat is given a directory. This will not affect hidden files, ignored files, or files specified by their direct path.
+### File Exclude Glob list
+List of [glob patterns](https://docs.python.org/3/library/glob.html) that will exclude all files from context that it matches starting from the git root. Importantly, this means that the pattern to exclude all files ending with `.py` would be `**/*.py` rather than `*.py`. Here is an example that would exclude all hidden directories and files:
 ```
 {
-    "filetype-include-list": [".include_this"],
-    "filetype-exclude-list": [".exclude_this"]
+    "file-exclude-glob-list": ["**/.*, **/.*/**"]
 }
 ```
 
