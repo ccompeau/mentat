@@ -1,4 +1,5 @@
 {
+    "use-gpt-35": true,
     "allow-32k": false,
     "input-style": [
         [

@@ -28,6 +28,9 @@ class ConfigManager:
     def input_style(self) -> list[list[str]]:
         return self._get_key("input-style")
 
+    def use_gpt_35(self) -> str:
+        return self._get_key("use-gpt-35")
+
     def allow_32k(self) -> bool:
         return self._get_key("allow-32k")
 

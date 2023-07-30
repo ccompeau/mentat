@@ -57,7 +57,7 @@ def count_tokens(message: str) -> int:
     return len(tiktoken.encoding_for_model("gpt-4").encode(message))
 
 
-def choose_model(messages: list[dict[str, str]], allow_32k) -> str:
+def choose_model(messages: list[dict[str, str]], allow_32k: bool, use_gpt_35: bool) -> str:
     prompt_token_count = 0
     tokenizer = tiktoken.encoding_for_model("gpt-4")
     for message in messages:
@@ -65,7 +65,10 @@ def choose_model(messages: list[dict[str, str]], allow_32k) -> str:
         prompt_token_count += len(encoding)
     cprint(f"\nTotal token count: {prompt_token_count}", "cyan")
 
-    model = "gpt-4-0314"
+    if use_gpt_35:
+        model = "gpt-3.5-turbo-16k-0613"
+    else:
+        model = "gpt-4-0314"
     token_buffer = 500
     if prompt_token_count > 8192 - token_buffer:
         if allow_32k:
@@ -100,6 +103,8 @@ class CostTracker:
         call_time: float,
     ) -> None:
         cost_per_1000_tokens = {
+            "gpt-3.5-turbo-0613": (0.0015, 0.002),
+            "gpt-3.5-turbo-16k-0613": (0.003, 0.004),
             "gpt-4-0314": (0.03, 0.06),
             "gpt-4-32k-0314": (0.06, 0.12),
         }

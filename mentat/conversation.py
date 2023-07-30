@@ -14,6 +14,7 @@ class Conversation:
         self.messages = []
         self.add_system_message(system_prompt)
         self.allow_32k = config.allow_32k()
+        self.use_gpt_35 = config.use_gpt_35()
         self.cost_tracker = cost_tracker
 
         if self.allow_32k:
@@ -47,7 +48,7 @@ class Conversation:
         code_message = code_file_manager.get_code_message()
         messages.append({"role": "system", "content": code_message})
 
-        model, num_prompt_tokens = choose_model(messages, self.allow_32k)
+        model, num_prompt_tokens = choose_model(messages, self.allow_32k, self.use_gpt_35)
 
         state = run_async_stream_and_parse_llm_response(
             messages, model, code_file_manager
