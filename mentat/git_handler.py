@@ -3,6 +3,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from mentat.errors import UserError
+
 
 def get_git_diff_for_path(git_root, path: str) -> str:
     return subprocess.check_output(["git", "diff", path], cwd=git_root).decode("utf-8")
@@ -29,8 +31,14 @@ def get_paths_with_git_diffs(git_root) -> set[str]:
     changed = subprocess.check_output(
         ["git", "diff", "--name-only"], cwd=git_root, text=True
     ).split("\n")
+    new = subprocess.check_output(
+        ["git", "ls-files", "-o", "--exclude-standard"], cwd=git_root, text=True
+    ).split("\n")
     return set(
-        map(lambda path: os.path.realpath(os.path.join(git_root, Path(path))), changed)
+        map(
+            lambda path: os.path.realpath(os.path.join(git_root, Path(path))),
+            changed + new,
+        )
     )
 
 
@@ -57,7 +65,7 @@ def _get_git_root_for_path(path) -> str:
         return os.path.realpath(git_root)
     except subprocess.CalledProcessError:
         logging.error(f"File {path} isn't part of a git project.")
-        exit()
+        raise UserError()
 
 
 def get_shared_git_root_for_paths(paths) -> str:
@@ -74,9 +82,9 @@ def get_shared_git_root_for_paths(paths) -> str:
             "All paths must be part of the same git project! Projects provided:"
             f" {git_roots}"
         )
-        exit()
+        raise UserError()
     elif len(git_roots) == 0:
         logging.error("No git projects provided.")
-        exit()
+        raise UserError()
 
     return git_roots.pop()

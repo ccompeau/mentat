@@ -2,19 +2,20 @@ import argparse
 import glob
 import logging
 import os
-from typing import Iterable
+from typing import Iterable, Optional
 
 from termcolor import cprint
 
-from .code_change import CodeChange, CodeChangeAction
+from .code_change import CodeChange
 from .code_change_display import print_change
 from .code_file_manager import CodeFileManager
 from .config_manager import ConfigManager, mentat_dir_path
 from .conversation import Conversation
+from .errors import MentatError, UserError
 from .git_handler import get_shared_git_root_for_paths
-from .llm_api import CostTracker, count_tokens, setup_api_key
+from .llm_api import CostTracker, setup_api_key
 from .logging_config import setup_logging
-from .user_input_manager import UserInputManager
+from .user_input_manager import UserInputManager, UserQuitInterrupt
 
 
 def run_cli():
@@ -24,43 +25,80 @@ def run_cli():
     parser.add_argument(
         "paths",
         nargs="*",
-        help="Space separated list of file paths, directory paths, or glob patterns",
+        default=[],
+        help="List of file paths, directory paths, or glob patterns",
     )
-    paths = parser.parse_args().paths
-    run(expand_paths(paths))
+    parser.add_argument(
+        "--exclude",
+        "-e",
+        nargs="*",
+        default=[],
+        help="List of file paths, directory paths, or glob patterns to exclude",
+    )
+    args = parser.parse_args()
+    paths = args.paths
+    exclude_paths = args.exclude
+    run(expand_paths(paths), expand_paths(exclude_paths))
 
 
 def expand_paths(paths: Iterable[str]) -> Iterable[str]:
     globbed_paths = set()
+    invalid_paths = []
     for path in paths:
-        globbed_paths.update(glob.glob(pathname=path, recursive=True))
+        new_paths = glob.glob(pathname=path, recursive=True)
+        if new_paths:
+            globbed_paths.update(new_paths)
+        else:
+            invalid_paths.append(path)
+    if invalid_paths:
+        cprint(
+            "The following paths do not exist:",
+            "light_yellow",
+        )
+        print("\n".join(invalid_paths))
+        exit()
     return globbed_paths
 
 
-def run(paths: Iterable[str]):
+def run(paths: Iterable[str], exclude_paths: Optional[Iterable[str]] = None):
     os.makedirs(mentat_dir_path, exist_ok=True)
     setup_logging()
-    setup_api_key()
     logging.debug(f"Paths: {paths}")
 
     cost_tracker = CostTracker()
     try:
-        loop(paths, cost_tracker)
-    except (EOFError, KeyboardInterrupt) as e:
-        print(e)
+        setup_api_key()
+        loop(paths, exclude_paths, cost_tracker)
+    except (
+        EOFError,
+        KeyboardInterrupt,
+        UserQuitInterrupt,
+        UserError,
+        MentatError,
+    ) as e:
+        if str(e):
+            cprint("\n" + str(e), "red")
     finally:
         cost_tracker.display_total_cost()
 
 
-def loop(paths: Iterable[str], cost_tracker: CostTracker) -> None:
+def loop(
+    paths: Iterable[str],
+    exclude_paths: Optional[Iterable[str]],
+    cost_tracker: CostTracker,
+) -> None:
     git_root = get_shared_git_root_for_paths(paths)
     config = ConfigManager(git_root)
-    conv = Conversation(config, cost_tracker)
     user_input_manager = UserInputManager(config)
-    code_file_manager = CodeFileManager(paths, user_input_manager, config, git_root)
+    code_file_manager = CodeFileManager(
+        paths,
+        exclude_paths if exclude_paths is not None else [],
+        user_input_manager,
+        config,
+        git_root,
+    )
+    conv = Conversation(config, cost_tracker, code_file_manager)
 
-    tokens = count_tokens(code_file_manager.get_code_message())
-    cprint(f"\nFile token count: {tokens}", "cyan")
     cprint("Type 'q' or use Ctrl-C to quit at any time.\n", color="cyan")
     cprint("What can I do for you?", color="light_blue")
     need_user_request = True
@@ -68,8 +106,7 @@ def loop(paths: Iterable[str], cost_tracker: CostTracker) -> None:
         if need_user_request:
             user_response = user_input_manager.collect_user_input()
             conv.add_user_message(user_response)
-        explanation, code_changes = conv.get_model_response(code_file_manager, config)
-        warn_user_wrong_files(code_file_manager, code_changes, git_root)
+        explanation, code_changes = conv.get_model_response(config)
 
         if code_changes:
             need_user_request = get_user_feedback_on_changes(
@@ -77,42 +114,6 @@ def loop(paths: Iterable[str], cost_tracker: CostTracker) -> None:
             )
         else:
             need_user_request = True
-
-
-def warn_user_wrong_files(
-    code_file_manager: CodeFileManager,
-    code_changes: Iterable[CodeChange],
-    git_root: str,
-):
-    warned = set()
-    for change in code_changes:
-        if change.action == CodeChangeAction.CreateFile and os.path.exists(change.file):
-            logging.info("Model tried to create a file that already exists")
-            cprint(
-                f"Error: tried to create {change.file}, but file already existed!",
-                color="red",
-            )
-            raise KeyboardInterrupt
-        elif change.action == CodeChangeAction.DeleteFile and not os.path.exists(
-            change.file
-        ):
-            logging.info("Model tried to delete a file that didn't exist")
-            cprint(
-                f"Error: tried to delete {change.file}, but file doesn't exist!",
-                color="red",
-            )
-            raise KeyboardInterrupt
-
-        if (
-            os.path.join(git_root, change.file) not in code_file_manager.file_paths
-            and change.action != CodeChangeAction.CreateFile
-            and change.file not in warned
-        ):
-            warned.add(change.file)
-            cprint(
-                f"Change in {change.file} does not match original files!",
-                color="light_yellow",
-            )
 
 
 def get_user_feedback_on_changes(

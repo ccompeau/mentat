@@ -10,26 +10,27 @@ from dotenv import load_dotenv
 from termcolor import cprint
 
 from .config_manager import mentat_dir_path, user_config_path
+from .errors import MentatError, UserError
 
 package_name = __name__.split(".")[0]
 
 
 # Check for .env file or already exported API key
-# If no api key found, exit and warn user
+# If no api key found, raise an error
 def setup_api_key():
     if not load_dotenv(os.path.join(mentat_dir_path, ".env")):
         load_dotenv()
     key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        raise UserError(
+            "No OpenAI api key detected.\nEither place your key into a .env"
+            " file or export it as an environment variable."
+        )
     try:
         openai.api_key = key
         openai.Model.list()  # Test the API key
-    except openai.error.AuthenticationError:
-        cprint(
-            "No valid OpenAI api key detected.\nEither place your key into a .env"
-            " file or export it as an environment variable.",
-            "red",
-        )
-        sys.exit(0)
+    except openai.error.AuthenticationError as e:
+        raise UserError(f"OpenAI gave an Authentication Error:\n{e}")
 
 
 async def call_llm_api(messages: list[dict[str, str]], model) -> Generator:
@@ -38,8 +39,8 @@ async def call_llm_api(messages: list[dict[str, str]], model) -> Generator:
         and "--benchmark" not in sys.argv
         and os.getenv("MENTAT_BENCHMARKS_RUNNING") == "false"
     ):
-        logging.critical("OpenAI call made in non benchmark test environment!")
-        sys.exit(1)
+        logging.critical("OpenAI call attempted in non benchmark test environment!")
+        raise MentatError("OpenAI call attempted in non benchmark test environment!")
 
     response = await openai.ChatCompletion.acreate(
         model=model,
@@ -52,7 +53,9 @@ async def call_llm_api(messages: list[dict[str, str]], model) -> Generator:
 
 
 def count_tokens(message: str) -> int:
-    return len(tiktoken.encoding_for_model("gpt-4").encode(message))
+    return len(
+        tiktoken.encoding_for_model("gpt-4").encode(message, disallowed_special=())
+    )
 
 
 def check_model_availability(allow_32k: bool, use_gpt_35: bool) -> bool:
@@ -84,10 +87,8 @@ def check_model_availability(allow_32k: bool, use_gpt_35: bool) -> bool:
 
 def choose_model(messages: list[dict[str, str]], allow_32k: bool, use_gpt_35: bool) -> str:
     prompt_token_count = 0
-    tokenizer = tiktoken.encoding_for_model("gpt-4")
     for message in messages:
-        encoding = tokenizer.encode(message["content"])
-        prompt_token_count += len(encoding)
+        prompt_token_count += count_tokens(message["content"])
     cprint(f"\nTotal token count: {prompt_token_count}", "cyan")
 
     if use_gpt_35:
